@@ -2,13 +2,11 @@
 title: Langfuse OWUI Custom Pipeline
 author: codex
 date: 2026-03-24
-version: 0.1.0
+version: 0.1.1
 license: MIT
 description: Langfuse v3 filter pipeline for OpenWebUI with skill and tool capture.
 requirements: langfuse>=3.0.0
 """
-
-from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import hashlib
