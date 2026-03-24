@@ -142,6 +142,35 @@ def extract_tool_call_details_from_text(text: str) -> List[dict]:
     return matches
 
 
+def summarize_result_payload(result_payload: Any) -> dict:
+    if isinstance(result_payload, dict):
+        summary = {
+            "type": "dict",
+            "keys": sorted(result_payload.keys()),
+        }
+        if isinstance(result_payload.get("name"), str):
+            summary["name"] = result_payload["name"]
+        if isinstance(result_payload.get("content"), str):
+            content = result_payload["content"]
+            summary["content_preview"] = content[:500]
+            summary["content_sha256"] = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
+        return summary
+
+    if isinstance(result_payload, str):
+        return {
+            "type": "string",
+            "preview": result_payload[:500],
+            "sha256": hashlib.sha256(result_payload.encode("utf-8")).hexdigest(),
+        }
+
+    return {
+        "type": type(result_payload).__name__,
+        "preview": safe_json(result_payload),
+    }
+
+
 class Pipeline:
     class Valves(BaseModel):
         pipelines: list[str] = ["*"]
@@ -394,6 +423,12 @@ class Pipeline:
                     result_payload = tool_call.get("result")
                     if self.valves.capture_tool_outputs:
                         observation.update(output=safe_json(result_payload))
+                        observation.update(
+                            metadata={
+                                **metadata,
+                                "result_summary": summarize_result_payload(result_payload),
+                            }
+                        )
                     observation.end()
                     state["seen_tool_call_ids"].add(call_id)
 
