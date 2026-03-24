@@ -108,7 +108,7 @@ def extract_usage(message: Optional[dict]) -> Optional[dict]:
 
 class Pipeline:
     class Valves(BaseModel):
-        pipelines: List[str] = ["*"]
+        pipelines: list[str] = ["*"]
         priority: int = 0
         secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
         public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
@@ -137,6 +137,9 @@ class Pipeline:
         if self.valves.debug:
             print(f"[LANGFUSE_OWUI_CUSTOM] {message}")
 
+    def log_always(self, message: str) -> None:
+        print(f"[LANGFUSE_OWUI_CUSTOM] {message}")
+
     async def on_startup(self):
         self.set_langfuse()
 
@@ -149,7 +152,7 @@ class Pipeline:
 
     def set_langfuse(self) -> None:
         if not self.valves.secret_key or not self.valves.public_key:
-            self.log("Langfuse keys not configured")
+            self.log_always("Langfuse keys not configured")
             self.langfuse = None
             return
 
@@ -161,9 +164,9 @@ class Pipeline:
                 debug=self.valves.debug,
             )
             self.langfuse.auth_check()
-            self.log(f"Langfuse ready base_url={self.valves.base_url}")
+            self.log_always(f"Langfuse ready base_url={self.valves.base_url}")
         except Exception as exc:
-            self.log(f"Langfuse init failed: {exc}")
+            self.log_always(f"Langfuse init failed: {exc}")
             self.langfuse = None
 
     def should_trace_task(self, task_name: str) -> bool:
@@ -177,6 +180,15 @@ class Pipeline:
             or metadata.get("chat_id")
             or f"local-{uuid.uuid4()}"
         )
+
+    def get_state_key(self, body: dict, __metadata__: Optional[dict], __chat_id__: Optional[str]) -> str:
+        metadata = __metadata__ or body.get("metadata") or {}
+        chat_id = self.get_chat_id(body, __metadata__, __chat_id__)
+        message_id = body.get("id") or body.get("message_id") or metadata.get("message_id")
+        task_name = self.get_task_name(body, __metadata__, "chat")
+        if message_id:
+            return f"{chat_id}:{message_id}:{task_name}"
+        return f"{chat_id}:{task_name}"
 
     def get_task_name(self, body: dict, __metadata__: Optional[dict], default: str) -> str:
         metadata = __metadata__ or body.get("metadata") or {}
@@ -252,14 +264,14 @@ class Pipeline:
             "raw_model": safe_json(__model__),
         }
 
-    def get_or_create_state(self, chat_id: str) -> dict:
-        if chat_id not in self.chat_state:
-            self.chat_state[chat_id] = {
+    def get_or_create_state(self, state_key: str) -> dict:
+        if state_key not in self.chat_state:
+            self.chat_state[state_key] = {
                 "trace": None,
                 "seen_tool_call_ids": set(),
                 "used_skill_names": set(),
             }
-        return self.chat_state[chat_id]
+        return self.chat_state[state_key]
 
     def maybe_full_input(self, body: dict) -> Any:
         return safe_json(body) if self.valves.capture_full_inputs else None
@@ -377,7 +389,8 @@ class Pipeline:
             return body
 
         chat_id = self.get_chat_id(body, __metadata__, __chat_id__)
-        state = self.get_or_create_state(chat_id)
+        state_key = self.get_state_key(body, __metadata__, __chat_id__)
+        state = self.get_or_create_state(state_key)
         model_info = self.get_model_info(body, __metadata__, __model__)
         available_skills = parse_available_skills(body.get("messages", []))
 
@@ -415,6 +428,8 @@ class Pipeline:
         state["task_name"] = task_name
         state["available_skills"] = available_skills
         state["trace_metadata"] = trace_metadata
+        state["state_key"] = state_key
+        state["chat_id"] = chat_id
         return body
 
     async def outlet(
@@ -434,7 +449,8 @@ class Pipeline:
             return body
 
         chat_id = self.get_chat_id(body, __metadata__, __chat_id__)
-        state = self.get_or_create_state(chat_id)
+        state_key = self.get_state_key(body, __metadata__, __chat_id__)
+        state = self.get_or_create_state(state_key)
         trace = state.get("trace")
         if trace is None:
             return body
@@ -479,7 +495,12 @@ class Pipeline:
             metadata=trace_metadata,
             tags=self.build_trace_tags(task_name, model_info, used_skill_names),
         )
+        trace.end()
         state["trace_metadata"] = trace_metadata
 
         self.langfuse.flush()
+        self.chat_state.pop(state_key, None)
         return body
+
+
+Pipeline.Valves.model_rebuild()
