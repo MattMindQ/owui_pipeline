@@ -108,7 +108,7 @@ def extract_usage(message: Optional[dict]) -> Optional[dict]:
 
 class Pipeline:
     class Valves(BaseModel):
-        pipelines: List[str] = ["*"]
+        pipelines: list[str] = ["*"]
         priority: int = 0
         secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
         public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
@@ -483,3 +483,6 @@ class Pipeline:
 
         self.langfuse.flush()
         return body
+
+
+Pipeline.Valves.model_rebuild()
