@@ -9,6 +9,7 @@ requirements: langfuse>=3.0.0
 """
 
 from typing import Any, Dict, List, Optional
+import html
 import hashlib
 import json
 import os
@@ -104,6 +105,41 @@ def extract_usage(message: Optional[dict]) -> Optional[dict]:
             usage_details["reasoning"] = reasoning
 
     return usage_details or None
+
+
+def maybe_parse_json_string(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    candidate = html.unescape(value).strip()
+    for _ in range(2):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, str):
+                candidate = parsed
+                continue
+            return parsed
+        except Exception:
+            break
+    return candidate
+
+
+def extract_tool_call_details_from_text(text: str) -> List[dict]:
+    pattern = re.compile(
+        r'<details\s+type="tool_calls"[^>]*id="(?P<id>[^"]+)"[^>]*name="(?P<name>[^"]+)"[^>]*arguments="(?P<arguments>[^"]*)"[^>]*result="(?P<result>[^"]*)"',
+        re.DOTALL,
+    )
+    matches = []
+    for match in pattern.finditer(text):
+        matches.append(
+            {
+                "id": match.group("id"),
+                "name": html.unescape(match.group("name")),
+                "arguments": maybe_parse_json_string(match.group("arguments")),
+                "result": maybe_parse_json_string(match.group("result")),
+            }
+        )
+    return matches
 
 
 class Pipeline:
@@ -334,6 +370,40 @@ class Pipeline:
                     skill_name = arguments.get("name")
                     if skill_name:
                         state["used_skill_names"].add(skill_name)
+
+            content = message.get("content")
+            if isinstance(content, str) and 'type="tool_calls"' in content:
+                for tool_call in extract_tool_call_details_from_text(content):
+                    call_id = tool_call.get("id")
+                    tool_name = tool_call.get("name") or "unknown_tool"
+                    if not call_id or call_id in state["seen_tool_call_ids"]:
+                        continue
+
+                    metadata = {
+                        "tool_type": "call",
+                        "tool_name": tool_name,
+                        "tool_call_id": call_id,
+                        "source": "assistant_content_details",
+                    }
+                    observation = trace.start_generation(
+                        name=f"tool_call:{tool_name}",
+                        model=tool_name,
+                        input=safe_json(tool_call.get("arguments")),
+                        metadata=metadata,
+                    )
+                    result_payload = tool_call.get("result")
+                    if self.valves.capture_tool_outputs:
+                        observation.update(output=safe_json(result_payload))
+                    observation.end()
+                    state["seen_tool_call_ids"].add(call_id)
+
+                    if tool_name == "view_skill":
+                        args = tool_call.get("arguments")
+                        if isinstance(args, dict) and args.get("name"):
+                            state["used_skill_names"].add(args["name"])
+                        result_data = tool_call.get("result")
+                        if isinstance(result_data, dict) and result_data.get("name"):
+                            state["used_skill_names"].add(result_data["name"])
 
         outputs = body.get("output", [])
         for item in outputs:
