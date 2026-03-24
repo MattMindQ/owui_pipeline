@@ -157,12 +157,23 @@ class Pipeline:
             return
 
         try:
-            self.langfuse = Langfuse(
-                public_key=self.valves.public_key,
-                secret_key=self.valves.secret_key,
-                base_url=self.valves.base_url,
-                debug=self.valves.debug,
-            )
+            client_kwargs = {
+                "public_key": self.valves.public_key,
+                "secret_key": self.valves.secret_key,
+                "debug": self.valves.debug,
+            }
+            try:
+                self.langfuse = Langfuse(
+                    base_url=self.valves.base_url,
+                    **client_kwargs,
+                )
+            except TypeError as exc:
+                if "base_url" not in str(exc):
+                    raise
+                self.langfuse = Langfuse(
+                    host=self.valves.base_url,
+                    **client_kwargs,
+                )
             self.langfuse.auth_check()
             self.log_always(f"Langfuse ready base_url={self.valves.base_url}")
         except Exception as exc:
