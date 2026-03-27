@@ -73,11 +73,7 @@ def parse_available_skills(messages: List[dict]) -> List[dict]:
     return deduped
 
 
-def extract_usage(message: Optional[dict]) -> Optional[dict]:
-    if not message:
-        return None
-
-    usage = message.get("usage")
+def normalize_usage(usage: Any) -> Optional[dict]:
     if not isinstance(usage, dict):
         return None
 
@@ -105,6 +101,59 @@ def extract_usage(message: Optional[dict]) -> Optional[dict]:
             usage_details["reasoning"] = reasoning
 
     return usage_details or None
+
+
+def extract_usage(message: Optional[dict]) -> Optional[dict]:
+    if not message:
+        return None
+    return normalize_usage(message.get("usage"))
+
+
+def extract_usage_from_body(body: dict, assistant_message: Optional[dict] = None) -> tuple[Optional[dict], Optional[str]]:
+    if assistant_message:
+        assistant_usage = extract_usage(assistant_message)
+        if assistant_usage:
+            return assistant_usage, "assistant_message.usage"
+
+    direct_candidates = [
+        ("body.usage", body.get("usage")),
+        ("body.response.usage", (body.get("response") or {}).get("usage") if isinstance(body.get("response"), dict) else None),
+        ("body.data.usage", (body.get("data") or {}).get("usage") if isinstance(body.get("data"), dict) else None),
+    ]
+
+    for source, candidate in direct_candidates:
+        usage_details = normalize_usage(candidate)
+        if usage_details:
+            return usage_details, source
+
+    output_items = body.get("output", [])
+    if isinstance(output_items, list):
+        for index, item in enumerate(output_items):
+            if not isinstance(item, dict):
+                continue
+
+            for key in ("usage",):
+                usage_details = normalize_usage(item.get(key))
+                if usage_details:
+                    return usage_details, f"body.output[{index}].{key}"
+
+            nested_response = item.get("response")
+            if isinstance(nested_response, dict):
+                usage_details = normalize_usage(nested_response.get("usage"))
+                if usage_details:
+                    return usage_details, f"body.output[{index}].response.usage"
+
+    messages = body.get("messages", [])
+    if isinstance(messages, list):
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if not isinstance(message, dict):
+                continue
+            usage_details = extract_usage(message)
+            if usage_details:
+                return usage_details, f"body.messages[{index}].usage"
+
+    return None, None
 
 
 def maybe_parse_json_string(value: Any) -> Any:
@@ -575,7 +624,7 @@ class Pipeline:
         self.capture_tool_calls(trace, state, body)
 
         assistant_message = get_last_assistant_message(body.get("messages", []))
-        usage_details = extract_usage(assistant_message)
+        usage_details, usage_source = extract_usage_from_body(body, assistant_message)
         used_skill_names = sorted(state["used_skill_names"])
 
         generation_metadata = {
@@ -587,6 +636,7 @@ class Pipeline:
             "used_skills": used_skill_names,
             "status_history": safe_json((assistant_message or {}).get("statusHistory")),
             "sources": safe_json((assistant_message or {}).get("sources")),
+            "usage_source": usage_source,
         }
 
         generation = trace.start_generation(

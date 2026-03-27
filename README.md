@@ -30,7 +30,7 @@ Default behavior:
 - traces normal assistant conversations
 - stores OWUI metadata, model metadata, configured `skillIds`, configured `toolIds`
 - stores used skills when `view_skill` is called
-- stores assistant token usage from OWUI `usage`
+- stores assistant token usage from OWUI `usage`, preferring assistant-message usage and falling back to compatible OWUI body usage locations when needed
 - stores actual tool calls used during a run, including cases where OWUI only exposes them in assistant message content
 - stores tool outputs when available
 
@@ -59,3 +59,4 @@ Notes:
 - It does not require modifying OWUI core code.
 - It uses `base_url=` for the Langfuse client and `usage_details=` for generation usage updates.
 - Some OWUI runs expose tool execution as structured arrays, others serialize them into assistant HTML/details blocks. This pipeline handles both.
+- OWUI usage can appear in different response locations depending on route/provider shape; this pipeline checks the assistant message first, then compatible body-level fallbacks.
